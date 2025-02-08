@@ -44,7 +44,6 @@ def clean_translation(text):
     return re.sub(r"[\(\)]", "", text).strip()
 
 # Функция для перевода слова на казахский через sozdik.kz
-
 def translate_to_kazakh(word):
     url = f"https://sozdik.kz/translate/ru/kk/{word}/"
 
@@ -109,12 +108,34 @@ def translate_to_kazakh(word):
 # Функция для перевода слова на английский через WooordHunt
 def translate_to_english(word):
     url = f"https://wooordhunt.ru/word/{word}"
+    
     try:
         response = requests.get(url, verify=False)  # Отключаем проверку SSL-сертификата
-        if response.status_code == 200 and '<span class="t_inline_en">' in response.text:
-            return response.text.split('<span class="t_inline_en">')[1].split("</span>")[0]
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            translations = set()  # Используем множество для удаления дубликатов
+
+            # 1️⃣ Поиск в <p class="t_inline"> (как в "Хлябь")
+            p_tag = soup.find("p", class_="t_inline")
+            if p_tag:
+                words = p_tag.text.strip().split(", ")  # Разбиваем, если есть дубли
+                translations.update(words[:1])  # Берём только первое слово
+
+            # 2️⃣ Поиск всех <a> внутри <div id="wd_content">
+            content_block = soup.find("div", id="wd_content", class_="ru_content")
+            if content_block:
+                for a_tag in content_block.find_all("a"):
+                    word = a_tag.text.strip()
+                    if word.isalpha():  # Фильтруем, чтобы брать только английские слова
+                        translations.add(word)
+
+            if translations:
+                return ", ".join(sorted(translations))  # Сортируем для красоты
+
     except Exception as e:
-        logging.error(f"Ошибка при переводе на английский: {e}")
+        print(f"Ошибка при переводе на английский: {e}")
+
     return "Перевод не найден"
 
 # Команда /word для отправки пользователю редкого слова
