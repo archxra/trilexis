@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+import json
 import logging
 import google.generativeai as genai
 import urllib3
@@ -35,7 +36,7 @@ def get_rare_word():
 
 # **Добавляем куки с `sid` авторизованного пользователя**
 COOKIES = {
-    "sid": "c0i4b22p13kjkh6vq98e1ve5g1"
+    "sid": "q3opq07hg5e0v0mn41id0q60lc"
 }
 
 # Функция очистки перевода
@@ -43,86 +44,96 @@ def clean_translation(text):
     """Удаляет скобки и лишние пробелы."""
     return re.sub(r"[\(\)]", "", text).strip()
 
-# Функция для перевода слова на казахский через sozdik.kz
+def parse_translation_arrow(text):
+    """Парсит перевод после символа `→`"""
+    if "→" in text:
+        return text.split("→", 1)[1].strip()
+    return None  # Если `→` нет, возвращаем `None`
+
 def translate_to_kazakh(word):
     url = f"https://sozdik.kz/translate/ru/kk/{word}/"
 
-    for attempt in range(3):  # Делаем до 3 попыток, если лимит превышен
+    for attempt in range(3):
         try:
             response = requests.get(url, cookies=COOKIES, verify=False)
 
-            # Проверяем, не вернул ли сайт JSON с ошибкой
-            if response.headers.get("Content-Type") == "application/json":
-                data = response.json()
-                if data.get("result") == -90:  # Ошибка "Translations limit exceed"
-                    print(f"Лимит запросов превышен, попытка {attempt+1}/3. Жду 5 секунд...")
-                    time.sleep(5)
-                    continue  # Пробуем снова
-
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, "html.parser")
-                translations = []
 
-                # 1️⃣ **Перевод в `<summary>` внутри `<a class="ig_local">`**
+                # 6️⃣ **Перевод в <summary> без <a>, где нужное слово не в теге**
                 for summary in soup.find_all("summary"):
                     for abbr in summary.find_all("abbr"):
                         abbr.extract()  # Удаляем ненужные <abbr>
+                    for em in summary.find_all("em"):
+                        em.extract()
 
-                    explanation_tag = summary.find("em")
-                    explanation = explanation_tag.text.strip() if explanation_tag else "Без пояснения"
+                    # Берём оставшийся текст без тегов
+                    clean_text = summary.text.strip()
+                    clean_text = clean_text.replace("1)", "")
+                    if clean_text:
+                        return clean_text
 
-                    if explanation_tag:
-                        explanation_tag.extract()  # Удаляем <em>, чтобы оставить только перевод
-
-                    # Извлекаем все слова внутри <a class="ig_local">
-                    local_translations = [a.text.strip() for a in summary.find_all("a", class_="ig_local")]
-
+                # 1️⃣ Перевод в <summary> внутри <a class="ig_local">
+                for summary in soup.find_all("summary"):
+                    local_translations = [a.text.strip() for a in summary.find_all("a")]
                     if local_translations:
-                        translations.append(f"{explanation}: {', '.join(local_translations)}")
+                        return local_translations[0]
 
-                # 2️⃣ **Перевод в `<em>` внутри `<p>` (убираем скобки)**
+                # 2️⃣ Перевод в <p> без <abbr>, <em>
+                for p_tag in soup.find_all("p"):
+                    for abbr in p_tag.find_all("abbr"):
+                        abbr.extract()
+                    for em in p_tag.find_all("em"):
+                        em.extract()
+                    kazakh_translation = p_tag.text.strip()
+                    if kazakh_translation:
+                        return kazakh_translation
+
+                # 3️⃣ Перевод в <em> внутри <p>
                 for p_tag in soup.find_all("p"):
                     em_tags = p_tag.find_all("em")
                     for em in em_tags:
-                        translation = clean_translation(em.text)  # Убираем скобки
+                        translation = em.text.strip()
                         if translation:
-                            translations.append(translation)
+                            return translation
 
-                # 3️⃣ **Перевод в `<p>` без `<abbr>`**
+                # 4️⃣ Перевод в <p> внутри <a class="ig_local"> (как в "благовест")
                 for p_tag in soup.find_all("p"):
-                    for abbr in p_tag.find_all("abbr"):
-                        abbr.extract()  # Удаляем ненужные <abbr>
+                    a_tag = p_tag.find_all("a")
+                    if a_tag:
+                        return a_tag[0].text.strip()
 
-                    kazakh_translation = p_tag.text.strip()
-                    if kazakh_translation:
-                        translations.append(kazakh_translation)
-
-                if translations:
-                    return "\n".join(translations)
+                # 5️⃣ Перевод после `→` в JSON
+                if "translation" in response.text:
+                    arrow_translation = parse_translation_arrow(response.text)
+                    if arrow_translation:
+                        return arrow_translation
 
         except Exception as e:
             print(f"Ошибка при переводе на казахский: {e}")
 
-    return "Перевод не найден"  # Если после 3 попыток ничего не нашли
+    return "Перевод не найден"
+
+
 
 # Функция для перевода слова на английский через WooordHunt
 def translate_to_english(word):
     url = f"https://wooordhunt.ru/word/{word}"
-    
+
     try:
         response = requests.get(url, verify=False)  # Отключаем проверку SSL-сертификата
-        
+
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             translations = set()  # Используем множество для удаления дубликатов
 
-            # 1️⃣ Поиск в <p class="t_inline"> (как в "Хлябь")
+            # 1️⃣ **Поиск в `<p class="t_inline">`** (как в "Хлябь")
             p_tag = soup.find("p", class_="t_inline")
             if p_tag:
                 words = p_tag.text.strip().split(", ")  # Разбиваем, если есть дубли
                 translations.update(words[:1])  # Берём только первое слово
 
-            # 2️⃣ Поиск всех <a> внутри <div id="wd_content">
+            # 2️⃣ **Поиск всех `<a>` внутри `<div id="wd_content">`**
             content_block = soup.find("div", id="wd_content", class_="ru_content")
             if content_block:
                 for a_tag in content_block.find_all("a"):
@@ -130,8 +141,17 @@ def translate_to_english(word):
                     if word.isalpha():  # Фильтруем, чтобы брать только английские слова
                         translations.add(word)
 
+            # 3️⃣ **Поиск первого `<span>` внутри `<div class="word_ex word_ex_sup">`**
+            example_block = soup.find("div", class_="word_ex word_ex_sup")
+            if example_block:
+                span_tag = example_block.find("span")  # Берём первый найденный `<span>`
+                if span_tag:
+                    translations.add(span_tag.text.strip())  # Добавляем текст
+
             if translations:
-                return ", ".join(sorted(translations))  # Сортируем для красоты
+                tr = list(translations)
+                filtered_tr = [word for word in tr if not re.search(r'[а-яА-Я]', word)]
+                return "; ".join(filtered_tr)  # Берём первый найденный перевод
 
     except Exception as e:
         print(f"Ошибка при переводе на английский: {e}")
@@ -148,6 +168,9 @@ async def word(update: Update, context: CallbackContext) -> None:
     kazakh_translation = translate_to_kazakh(word)
     english_translation = translate_to_english(word)
     
+    translation_kz = translate_to_kazakh(word)
+    print(f"Перевод на казахский: {translation_kz} (тип: {type(translation_kz)})")
+
     message = (
         f"📖 *Слово дня:* {word.strip()}\n\n"
         f"📜 *Значение:* {meaning.strip()}\n"
@@ -155,6 +178,7 @@ async def word(update: Update, context: CallbackContext) -> None:
         f"🇬🇧 *Перевод на английский:* {english_translation}"
     )
     
+    print(f"Отправляемое сообщение:\n{message}")
     await update.message.reply_text(message, parse_mode="Markdown")
 
 # Запуск бота
