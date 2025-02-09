@@ -40,7 +40,7 @@ def get_rare_word():
 
 # **Добавляем куки с `sid` авторизованного пользователя**
 COOKIES = {
-    "sid": "q3opq07hg5e0v0mn41id0q60lc"
+    "sid": "2n36i6q09cc79bf67fkr9ahvi9"
 }
 
 # Функция очистки перевода
@@ -60,12 +60,15 @@ def translate_to_kazakh(word):
     for attempt in range(3):
         try:
             response = requests.get(url, cookies=COOKIES, verify=False)
+            print(response.text)
 
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, "html.parser")
+                print(soup.clarify)
 
                 # 6️⃣ **Перевод в <summary> без <a>, где нужное слово не в теге**
                 for summary in soup.find_all("summary"):
+                    print(summary)
                     for abbr in summary.find_all("abbr"):
                         abbr.extract()  # Удаляем ненужные <abbr>
                     for em in summary.find_all("em"):
@@ -79,12 +82,14 @@ def translate_to_kazakh(word):
 
                 # 1️⃣ Перевод в <summary> внутри <a class="ig_local">
                 for summary in soup.find_all("summary"):
+                    print(summary)
                     local_translations = [a.text.strip() for a in summary.find_all("a")]
                     if local_translations:
                         return local_translations[0]
 
                 # 2️⃣ Перевод в <p> без <abbr>, <em>
                 for p_tag in soup.find_all("p"):
+                    print(p_tag)
                     for abbr in p_tag.find_all("abbr"):
                         abbr.extract()
                     for em in p_tag.find_all("em"):
@@ -95,6 +100,7 @@ def translate_to_kazakh(word):
 
                 # 3️⃣ Перевод в <em> внутри <p>
                 for p_tag in soup.find_all("p"):
+                    print(p_tag)
                     em_tags = p_tag.find_all("em")
                     for em in em_tags:
                         translation = em.text.strip()
@@ -103,6 +109,7 @@ def translate_to_kazakh(word):
 
                 # 4️⃣ Перевод в <p> внутри <a class="ig_local"> (как в "благовест")
                 for p_tag in soup.find_all("p"):
+                    print(p_tag)
                     a_tag = p_tag.find_all("a")
                     if a_tag:
                         return a_tag[0].text.strip()
