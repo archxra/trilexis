@@ -8,6 +8,8 @@ import urllib3
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext
 from bs4 import BeautifulSoup
+import time
+import threading
 
 # Отключаем предупреждения о невалидном сертификате (для прототипа)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -23,6 +25,8 @@ genai.configure(api_key=GEMINI_API_KEY)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+
+subscribed_chats = set()  # Храним ID чатов, подписанных на ежедневные слова
 
 # Функция для получения редкого слова через Gemini API
 def get_rare_word():
@@ -158,34 +162,92 @@ def translate_to_english(word):
 
     return "Перевод не найден"
 
+# Функция для получения значения слова через Gemini
+def get_word_meaning(word):
+    model = genai.GenerativeModel("gemini-pro")
+    prompt = f"Что означает слово '{word}'? Дай краткое определение."
+
+    response = model.generate_content(prompt)
+    if response and response.text:
+        return response.text.strip()
+    return "Определение не найдено"
+
 # Команда /word для отправки пользователю редкого слова
 async def word(update: Update, context: CallbackContext) -> None:
     word_info = get_rare_word()
     
     word = word_info.strip()
-    meaning = "Нет информации"
+    meaning = get_word_meaning(word)  # Теперь получаем значение слова
 
     kazakh_translation = translate_to_kazakh(word)
     english_translation = translate_to_english(word)
-    
-    translation_kz = translate_to_kazakh(word)
-    print(f"Перевод на казахский: {translation_kz} (тип: {type(translation_kz)})")
 
     message = (
-        f"📖 *Слово дня:* {word.strip()}\n\n"
-        f"📜 *Значение:* {meaning.strip()}\n"
+        f"📖 *Слово дня:* {word}\n\n"
+        f"📜 *Значение:* {meaning}\n"
         f"🇰🇿 *Перевод на казахский:* {kazakh_translation}\n"
         f"🇬🇧 *Перевод на английский:* {english_translation}"
     )
-    
+
     print(f"Отправляемое сообщение:\n{message}")
     await update.message.reply_text(message, parse_mode="Markdown")
+
+# Функция для рассылки ежедневного слова
+def dailyword_thread(app: Application):
+    while True:
+        time.sleep(86400)  # Ждём 24 часа
+        word_info = get_rare_word()
+        word = word_info.strip()
+        meaning = get_word_meaning(word)
+        kazakh_translation = translate_to_kazakh(word)
+        english_translation = translate_to_english(word)
+
+        message = (
+            f"📖 *Слово дня:* {word}\n\n"
+            f"📜 *Значение:* {meaning}\n"
+            f"🇰🇿 *Перевод на казахский:* {kazakh_translation}\n"
+            f"🇬🇧 *Перевод на английский:* {english_translation}"
+        )
+
+        for chat_id in subscribed_chats:
+            app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+
+# Команда для подписки на ежедневные слова
+async def subscribe(update: Update, context: CallbackContext):
+    chat_id = update.message.chat_id
+    subscribed_chats.add(chat_id)
+    await update.message.reply_text("Вы подписались на ежедневные слова!")
+    
+    # Отправляем слово сразу после подписки
+    word_info = get_rare_word()
+    word = word_info.strip()
+    meaning = get_word_meaning(word)
+    kazakh_translation = translate_to_kazakh(word)
+    english_translation = translate_to_english(word)
+
+    message = (
+        f"📖 *Слово дня:* {word}\n\n"
+        f"📜 *Значение:* {meaning}\n"
+        f"🇰🇿 *Перевод на казахский:* {kazakh_translation}\n"
+        f"🇬🇧 *Перевод на английский:* {english_translation}"
+    )
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+# Команда для отписки
+async def unsubscribe(update: Update, context: CallbackContext):
+    chat_id = update.message.chat_id
+    subscribed_chats.discard(chat_id)
+    await update.message.reply_text("Вы отписались от ежедневных слов.")
 
 # Запуск бота
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("word", word))
-    app.run_polling()
+    app.add_handler(CommandHandler("subscribe", subscribe))
+    app.add_handler(CommandHandler("unsubscribe", unsubscribe))
 
+    threading.Thread(target=dailyword_thread, args=(app,), daemon=True).start()
+    
+    app.run_polling()
 if __name__ == "__main__":
     main()
